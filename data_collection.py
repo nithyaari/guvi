@@ -1,6 +1,7 @@
 # importing the necessary libraries
 from unittest import result
 
+import mysql
 import pandas as pd
 import plotly.express as px
 import json
@@ -9,7 +10,19 @@ from streamlit_option_menu import option_menu
 import mysql.connector as sql
 import pymongo
 from pymongo.results import InsertManyResult
+
 from googleapiclient.discovery import build
+
+
+
+
+# Define the custom result class
+class CustomInsertManyResult(InsertManyResult):
+    def __init__(self, inserted_ids, acknowledged):
+        super().__init__(inserted_ids, acknowledged)
+        self.inserted_ids = inserted_ids  # You can access inserted_ids directly
+
+
 
 # SETTING PAGE CONFIGURATIONS
 
@@ -32,20 +45,26 @@ with st.sidebar:
                                    "nav-link-selected": {"background-color": "#C80101"}})
 
 # Bridging a connection with MongoDB Atlas and Creating a new database(youtube_data)
-client = pymongo.MongoClient("mongodb+srv://Dhiya:nithya@cluster0.eetbpgj.mongodb.net/?retryWrites=true&w=majority")
-db = client['youtube_db']
+MONGODB_URI = 'mongodb+srv://Dhiya:nithya@cluster0.eetbpgj.mongodb.net/?retryWrites=true&w=majority'
 
-# CONNECTING WITH MYSQL DATABASE
-mydb = sql.connect(host="localhost",
-                   user="root",
-                   password="nithya",
-                   database="youtube_db"
-                   )
-mycursor = mydb.cursor(buffered=True)
+
+# Initialize MongoDB client and database
+client = pymongo.MongoClient(MONGODB_URI)
+db = client['youtube_db']
+# Check if your specific database exists
+
+
+
+
+
+
+
 
 # BUILDING CONNECTION WITH YOUTUBE API
-api_key = "AIzaSyDhIbzBcKkGD75Lux4bHJStXhZtn_Sm04o"
+api_key = "AIzaSyBIlXRM-g0g0MxQhTa0loE2YzlG3iFTJ8M"
 youtube = build('youtube', 'v3', developerKey=api_key)
+
+
 
 
 # FUNCTION TO GET CHANNEL DETAILS
@@ -177,16 +196,6 @@ if selected == "Extract and Transform":
     tab1, tab2 = st.tabs(["$\huge EXTRACT $", "$\huge TRANSFORM $"])
 
 
-    def insert_into_channels():
-        collections = db.channel_details
-        query = """INSERT INTO channels VALUES(%s,%s,%s,%s,%s,%s,%s,%s)"""
-        data = []
-        for i in ch_details:
-            data.append((i['Channel_id'], i['Channel_name'], i['Playlist_id'], i['Subscribers'],
-                         i['Views'], i['Total_videos'], i['Description'], i['Country']))
-        mycursor.executemany(query, data)
-        mydb.commit()
-
 
     # EXTRACT TAB
     with tab1:
@@ -202,48 +211,100 @@ if selected == "Extract and Transform":
 
     if st.button("Upload to MongoDB"):
         with st.spinner('Please Wait for it...'):
-            try:
-
-                ch_details = get_channel_details(ch_id)
-                v_ids = get_channel_videos(ch_id)
-                vid_details = get_video_details(v_ids)
+            ch_details = get_channel_details(ch_id)
+            v_ids = get_channel_videos(ch_id)
+            vid_details = get_video_details(v_ids)
 
 
-                def COMMENTS():
-                    com_d = []
-                    for i in v_ids:
-                        com_d += get_comments_details(i)
-                    return com_d
+            def comments():
+                com_d = []
+                for i in v_ids:
+                    com_d += get_comments_details(i)
+                return com_d
 
 
-                comm_details = COMMENTS()
+            comm_details = comments()
+            collections1 = db.channel_details
+            insert_result = collections1.insert_many(ch_details)
+            num_inserted = len(insert_result.inserted_ids)
 
-                # Insert data into MONGODB COLLECTION
+            if num_inserted > 0:
+                print("Successfully inserted {} documents.".format(num_inserted))
+            else:
+                print("No documents were inserted.")
 
-                inserted_ids1, _ = db.channel_details.insert_many_with_ids(ch_details)
-                inserted_ids2, _ = db.video_details.insert_many_with_ids(vid_details)
-                inserted_ids3, _ = db.comments_details.insert_many_with_ids(comm_details)
+
+            collections2 = db.video_details
+            insert_result2 = collections2.insert_many(vid_details)
+            collections3 = db.comments_details
+            insert_result3 = collections3.insert_many(comm_details)
+
+            st.success("Upload to MogoDB successful !!")
+
+    if st.button("Show Channel Details (JSON)"):
+        # Query the MongoDB collection to retrieve the uploaded channel details
+        uploaded_channels = list(db.channel_details.find({}))
+        if uploaded_channels:
+            st.json(uploaded_channels)
+        else:
+            st.warning("No channel details found in MongoDB.")
 
 
-                st.success("Upload to MogoDB successful !!")
-
-                print(f'Debug: inserted_ids1 = {inserted_ids1}')
-                print(f'Debug: inserted_ids2 = {inserted_ids2}')
-                print(f'Debug: inserted_ids3 = {inserted_ids3}')
-
-            except Exception as e:
-                st.error(f'Error: {str(e)}')
 
     # TRANSFORM TAB
     with tab2:
-        st.markdown("#   ")
-        st.markdown("### Select a channel to begin Transformation to SQL")
+        try:
+            # Connect to the MySQL database
+            mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="nithya",
+                database="youtube_db"
+            )
 
-        ch_names = channel_name()
-        user_inp = st.selectbox("Select channel", options=ch_names)
+            # Create a cursor object
+            mycursor = mydb.cursor()
+
+            # Retrieve the channel details from the SQL database
+            mycursor.execute("SELECT * FROM youtube_db.channel_info")
+
+            ch_details = mycursor.fetchall()
+
+            # Retrieve the playlist details from the SQL database
+            mycursor.execute("SELECT * FROM youtube_db.playlist")
+            playlist_details = mycursor.fetchall()
+
+            # Retrieve the video details from the SQL database
+            mycursor.execute("SELECT * FROM youtube_db.video")
+            video_details = mycursor.fetchall()
+
+            # Retrieve the comment details from the SQL database
+            mycursor.execute("SELECT * FROM youtube_db.comment")
+            comment_details = mycursor.fetchall()
+
+            # Close the MySQL connection
+            mydb.close()
+
+            # Display the channel details, playlist details, video details, and comment details
+            st.markdown("# Channel Details")
+            st.table(pd.DataFrame(ch_details))
+
+            st.markdown("# Playlist Details")
+            st.table(pd.DataFrame(playlist_details))
+
+            st.markdown("# Video Details")
+            st.table(pd.DataFrame(video_details))
+
+            st.markdown("# Comment Details")
+            st.table(pd.DataFrame(comment_details))
+
+        except Exception as e:
+            st.error("There was an error connecting to the MySQL database.")
+            st.error(e)
 
 
-        def insert_into_channels():
+
+        def insert_into_channels(user_inp=None):
             collections = db.channel_details
             query = """INSERT INTO channels VALUES(%s,%s,%s,%s,%s,%s,%s,%s)"""
 
@@ -252,7 +313,7 @@ if selected == "Extract and Transform":
                 mydb.commit()
 
 
-        def insert_into_videos():
+        def insert_into_videos(user_inp=None):
             collections = db.video_details
             query1 = """INSERT INTO videos VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
 
@@ -262,7 +323,7 @@ if selected == "Extract and Transform":
                 mydb.commit()
 
 
-        def insert_into_comments():
+        def insert_into_comments(user_inp=None):
             collections1 = db.video_details
             collections2 = db.comments_details
             query2 = """INSERT INTO comments VALUES(%s,%s,%s,%s,%s,%s,%s)"""
